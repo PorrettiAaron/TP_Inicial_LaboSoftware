@@ -1,0 +1,14 @@
+Se necesita python 3.11 por el wheel precompilado de dlib (hay para 3.12 y 3.13, pero no andan correctamente)
+Para eso creamos un venv (usemos este nombre venv_proyecto para ponerlo en el .gitignore)
+
+# Cómo setear el proyecto en tu compu (CMD)
+(winget install python.python.3.11)
+py -3.11 -m venv venv_proyecto
+venv_proyecto\Scripts\activate
+pip install -e .
+deactivate
+
+# Cómo correr los tests (CMD)
+venv_proyecto\Scripts\activate
+python -m unittest tests\file.py
+deactivate

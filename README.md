@@ -1,37 +1,33 @@
 # 🧑‍💻 Proyecto de Reconocimiento Facial con Interfaz Gráfica
 
-Este proyecto implementa una aplicación en **Python 3.11** para **reconocimiento facial** con interfaz gráfica (Tkinter).  
-Permite:
-- Agregar imágenes de usuarios a una base de datos.
-- Capturar rostros en vivo desde la **webcam**.
-- Comparar rostros desde imágenes contra la base existente.
-- Administrar encodings (datos biométricos).
+Aplicación en **Python 3.11** con **Tkinter** para reconocimiento facial:  
+- 📸 Captura rostros desde webcam.  
+- 🖼️ Compara imágenes contra una base de datos.  
+- 👤 Permite agregar usuarios (rostros) a la base.  
+- 🛠️ Administra encodings (datos biométricos).
+
+El proyecto está configurado con **`pyproject.toml`** (PEP 621), el estándar moderno para empaquetado en Python.  
+Esto permite instalarlo fácilmente con `pip install .`.
 
 ---
 
-## 📋 Prerrequisitos
+## 📋 Requisitos
 
-Antes de comenzar, asegurate de tener instalado:
-
-- **Windows 10/11** (o Linux/Mac con Python 3.11).
-- [Python 3.11](https://www.python.org/downloads/release/python-3110/) (específicamente esta versión, por compatibilidad con `dlib`).
-- **Git** (opcional, para clonar el repositorio).
-
-⚠️ No uses Python 3.12 o 3.13: los wheels de `dlib` disponibles para esas versiones no funcionan correctamente en este proyecto.
+- **Python 3.11** (⚠️ obligatorio: por compatibilidad con `dlib`).
+- Sistema operativo: Windows 10/11 (probado) o Linux/Mac con build de `dlib` compatible.
+- [Git](https://git-scm.com/) (opcional, para clonar el repositorio).
 
 ---
 
 ## ⚙️ Configuración del entorno
 
-Vamos a crear un entorno virtual llamado `venv_proyecto` para aislar las dependencias.  
-Esto evita conflictos con otros proyectos y es la forma recomendada de trabajar en Python.
-
-### 1. Instalar Python 3.11 (Windows con winget)
+### 1. Instalar Python 3.11
+En Windows:
 ```bash
 winget install python.python.3.11
 ```
 
-Verificá la instalación:
+Verificar:
 ```bash
 py -3.11 --version
 ```
@@ -41,70 +37,60 @@ py -3.11 --version
 py -3.11 -m venv venv_proyecto
 ```
 
-Esto genera la carpeta `venv_proyecto/` en el proyecto (ya está en el `.gitignore`).
-
 ### 3. Activar entorno virtual
-En **Windows (CMD o PowerShell)**:
+- Windows (CMD o PowerShell):
+  ```bash
+  venv_proyecto\Scripts\activate
+  ```
+- Linux/Mac:
+  ```bash
+  source venv_proyecto/bin/activate
+  ```
+
+### 4. Instalar dependencias del proyecto
+Como este proyecto usa `pyproject.toml`, basta con:
 ```bash
-venv_proyecto\Scripts\activate
+pip install -e .
 ```
 
-En **Linux/Mac**:
-```bash
-source venv_proyecto/bin/activate
-```
-
-Cuando esté activo, verás el prefijo `(venv_proyecto)` en la consola.
-
-### 4. Instalar dependencias
-Con el entorno activado, instalá las dependencias necesarias:
-
-```bash
-pip install -r requirements.txt
-```
-
-Si no tenés un `requirements.txt`, podés instalar manualmente:
-
-```bash
-pip install opencv-python dlib face-recognition
-```
-
-*(Tkinter viene incluido con Python en la mayoría de instalaciones, no requiere instalación adicional).*
+Esto instalará:
+- `opencv-python`
+- `numpy`
+- `face_recognition`
+- `dlib` (desde wheel precompilado para Python 3.11 en Windows)
+- y cualquier otra dependencia listada en el `pyproject.toml`.
 
 ### 5. Desactivar entorno virtual
-Cuando termines de usarlo:
 ```bash
 deactivate
 ```
 
 ---
 
-## ▶️ Ejecutar la aplicación
+## ▶️ Uso de la aplicación
 
 1. Activar el entorno virtual:
    ```bash
    venv_proyecto\Scripts\activate
    ```
 
-2. Ejecutar la aplicación principal:
+2. Ejecutar la app gráfica:
    ```bash
-   python app_main.py
+   python app.py
    ```
 
-3. Funcionalidades disponibles en la interfaz:
-   - **Agregar usuarios**: Selecciona imágenes de rostros y guárdalas en `tests/db_images/`.
-   - **Captar rostro con webcam**: Abre la cámara y compara rostros detectados con la base.
-   - **Captar rostro desde imagen**: Elegí una imagen para compararla contra la base.
-   - **Regenerar encodings**: Recalcula los datos biométricos de todas las imágenes.
-   - **Detectar imágenes problemáticas**: Lista archivos que no generaron un encoding válido.
+3. Funcionalidades en la interfaz:
+   - **Agregar usuarios** → selecciona imágenes y las guarda en `tests/db_images/`.
+   - **Captar rostro con webcam** → abre la cámara y compara rostros en vivo.
+   - **Captar rostro desde imagen** → permite comparar una foto con la base.
+   - **Regenerar encodings** → recalcula los datos de reconocimiento de toda la base.
+   - **Detectar imágenes problemáticas** → lista archivos sin encodings válidos.
 
-Para cerrar la ventana de la webcam, presioná la tecla **q**.
+👉 Para salir de la ventana de la webcam, presioná **q**.
 
 ---
 
-## 🧪 Ejecutar tests
-
-Podés correr los tests incluidos en la carpeta `tests/` con:
+## 🧪 Correr tests
 
 ```bash
 venv_proyecto\Scripts\activate
@@ -118,14 +104,15 @@ deactivate
 
 ```
 .
-├─ app_main.py          # Punto de entrada de la aplicación
+├─ app.py               # Punto de entrada de la aplicación
 ├─ gui.py               # Interfaz gráfica (Tkinter)
-├─ actions.py           # Lógica de las acciones de la GUI
-├─ helpers.py           # Funciones auxiliares y configuraciones
+├─ actions.py           # Lógica de la aplicación
+├─ helpers.py           # Funciones auxiliares
+├─ pyproject.toml       # Configuración del paquete y dependencias
 ├─ src/
 │  └─ utils_recognition.py
 └─ tests/
-   ├─ db_images/        # Carpeta con imágenes de usuarios registrados
+   ├─ db_images/        # Carpeta de imágenes de usuarios
    └─ img_test.jpg      # Imagen de prueba (opcional)
 ```
 
@@ -133,8 +120,8 @@ deactivate
 
 ## 🙌 Notas finales
 
-- Si la aplicación marca errores al comparar, revisá que las imágenes en `tests/db_images/` contengan rostros claros y frontales.  
-- El botón **“Detectar imágenes problemáticas”** ayuda a identificar archivos que no generaron encodings válidos.  
-- Si querés cambiar la carpeta de base de datos, podés editar `DATABASE_PATH` en `helpers.py`.
+- Conservá el archivo **`pyproject.toml`** → es el estándar moderno y permite compartir fácilmente el proyecto.  
+- Si alguna imagen no genera encoding, usá el botón **“Detectar imágenes problemáticas”** en la interfaz.  
+- Para publicar en **PyPI** más adelante, ya tenés lo esencial en `pyproject.toml`.
 
 ---

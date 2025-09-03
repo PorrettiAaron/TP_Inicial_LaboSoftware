@@ -15,5 +15,6 @@ dependencies = [
     "opencv-python==4.9.0.80",
     "numpy==1.26.3",
     "face_recognition",
+    "tkinter",
     "dlib @ https://github.com/z-mahmud22/Dlib_Windows_Python3.x/raw/main/dlib-19.24.1-cp311-cp311-win_amd64.whl"
 ]

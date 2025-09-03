@@ -1,142 +1,326 @@
-from enum import Enum
+import os
+import shutil
+import threading
 import tkinter as tk
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import pandas as pd
+from tkinter import filedialog, simpledialog, messagebox, scrolledtext
 
-PYME_EXCEL = "pyme.xlsx"
+# --- Dependencias externas ---
+# pip install opencv-python
+# (Opcional Pillow si querés thumbnails en la GUI)
 
-class PlotType(str, Enum):
-    LINEA = "Gráfico de líneas"
-    BARRA = "Gráfico de barras"
+import cv2
 
-class PymeData(str, Enum):
-    #TODO poner los adecuados cuando esté hecho el excel
-    PRODUCCION      = "Producción"
-    PERDIDAS        = "Pérdidas"
-    GANANCIAS       = "Ganancias"
-    VENTAS          = "Ventas"
-    PRECIOS_INSUMOS = "Precios Insumos"
-    STOCK           = "Stock"
+# Ajustá este import a tu proyecto. Debe proveer:
+# - _save_encodings_if_necessary(db_path)
+# - get_saved_encodings(db_path) -> dict[str, np.ndarray | list | None]
+# - get_face_encoding_from_opencv_frame(frame) -> vector | [vector] | None
+# - get_face_encoding_from_image_path(path) -> vector | [vector] | None
+# - comparison(encoding_a, encoding_b) -> (distance: float, same_person: bool)
+import src.utils_recognition as u_rec  # noqa: E402
 
-class PymeDataVisualizer:
+# ---------------- Config ----------------
+DATABASE_PATH = "./tests/db_images/"
+TEST_IMAGE_PATH_DEFAULT = "./tests/img_test.jpg"  # Solo como sugerencia inicial de ruta
 
-    # El programa se rompe si se cierra el programa con Ctrl+C desde terminal en vez de cerrando la ventana
-    # No sé cómo arreglar eso
-    def on_close(self):
-        try:
-            plt.close(self.fig)
-        finally:
-            self.root.destroy()
+# Asegurar carpeta de base
+os.makedirs(DATABASE_PATH, exist_ok=True)
 
+
+# ---------------- Utilidades ----------------
+def print_to_log(widget: scrolledtext.ScrolledText, msg: str):
+    widget.configure(state="normal")
+    widget.insert(tk.END, msg)
+    widget.see(tk.END)
+    widget.configure(state="disabled")
+
+
+def safe_regenerate_encodings(database_path: str, text_sink=None):
+    """
+    Regenera encodings si hace falta (o fuerza la creación).
+    """
+    if text_sink:
+        text_sink("Generando/actualizando encodings de la base...\n")
+    u_rec._save_encodings_if_necessary(database_path)
+    if text_sink:
+        text_sink("Encodings listos.\n")
+
+
+def normalize_encoding(enc):
+    """
+    Acepta vector, lista/tupla de vectores o None.
+    Devuelve: vector o None.
+    """
+    if enc is None:
+        return None
+    if isinstance(enc, (list, tuple)):
+        return enc[0] if len(enc) > 0 else None
+    return enc
+
+
+def filtered_db_encodings(db_dict):
+    """
+    Quita entradas None o vacías.
+    """
+    cleaned = {}
+    for k, v in db_dict.items():
+        if v is None:
+            continue
+        if isinstance(v, (list, tuple)) and len(v) == 0:
+            continue
+        cleaned[k] = normalize_encoding(v)
+    return cleaned
+
+
+def find_invalid_db_images():
+    """
+    Devuelve lista de nombres de archivo en la base que no tienen encoding válido.
+    """
+    u_rec._save_encodings_if_necessary(DATABASE_PATH)
+    encs = u_rec.get_saved_encodings(DATABASE_PATH)
+    bad = []
+    for name, enc in encs.items():
+        enc = normalize_encoding(enc)
+        if enc is None:
+            bad.append(name)
+    return bad
+
+
+# ---------------- Lógica de GUI ----------------
+class FaceApp:
     def __init__(self, root):
         self.root = root
-        self.root.title = "Visualización de datos de la PYME"
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.title("Reconocimiento facial - Interfaz")
+        self.root.geometry("720x520")
 
-        self.plot_type_var = tk.StringVar(value=PlotType.LINEA)
-        self.pymedata_var = tk.StringVar(value=PymeData.PRODUCCION)
+        # ---- Controles superiores
+        top = tk.Frame(root, padx=10, pady=10)
+        top.pack(fill="x")
 
-        menu_plot_type = tk.OptionMenu(self.root, self.plot_type_var, *(ptype for ptype in PlotType), command=self.show_graph_with_new_plot_type)
-        menu_plot_type.pack(padx=10, pady=10)
+        self.btn_add_users = tk.Button(top, text="Agregar usuarios (seleccionar imágenes)", command=self.add_users)
+        self.btn_add_users.grid(row=0, column=0, sticky="ew", padx=4, pady=4, columnspan=2)
 
-        menu_choose_data = tk.OptionMenu(self.root, self.pymedata_var, *(pdata for pdata in PymeData), command=self.update_graph_with_new_data)
-        menu_choose_data.pack(padx=10, pady=10)
+        self.btn_webcam = tk.Button(top, text="Captar rostro con webcam", command=self.run_webcam_threaded)
+        self.btn_webcam.grid(row=1, column=0, sticky="ew", padx=4, pady=4)
 
-        self.fig, self.ax = plt.subplots()
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
-        self.widget = self.canvas.get_tk_widget()
-        self.widget.pack(padx=10, pady=10)
+        self.btn_image = tk.Button(top, text="Captar rostro desde imagen", command=self.compare_from_image)
+        self.btn_image.grid(row=1, column=1, sticky="ew", padx=4, pady=4)
 
-        self.excel_file = pd.ExcelFile(PYME_EXCEL)
-        self.df = None
+        self.btn_rebuild = tk.Button(top, text="Regenerar encodings", command=self.rebuild_encodings)
+        self.btn_rebuild.grid(row=2, column=0, sticky="ew", padx=4, pady=4)
 
-        self.current_x = None
-        self.current_y = None
-        self.current_label = None
+        self.btn_check_bad = tk.Button(top, text="Detectar imágenes problemáticas", command=self.check_bad_images)
+        self.btn_check_bad.grid(row=2, column=1, sticky="ew", padx=4, pady=4)
 
-    def show_graph_with_new_plot_type(self, ptype):
-        #if self.df is None:
-        #    return
+        # Umbral (opcional, si tu comparison usa uno interno, podés ignorar esto.
+        # Aquí solo lo usamos para log y potencial uso propio)
+        thr_frame = tk.Frame(root, padx=10)
+        thr_frame.pack(fill="x")
+        tk.Label(thr_frame, text="Umbral (solo informativo):").pack(side="left")
+        self.threshold_var = tk.DoubleVar(value=0.6)
+        self.thr = tk.Scale(thr_frame, variable=self.threshold_var, from_=0.2, to=1.2, resolution=0.01,
+                            orient="horizontal", length=280)
+        self.thr.pack(side="left", padx=8)
 
-        # Nomas para cuando no hay data definida yet
-        if self.df is None or self.current_x is None or self.current_y is None: 
-            self.ax.clear()
-            self.ax.set_xlabel("Unknown")
-            self.ax.set_ylabel("Unknown")
-            self.canvas.draw()
-            print("NO DATA")
-            return 
+        # ---- Log de resultados
+        log_frame = tk.LabelFrame(root, text="Resultados / Log", padx=8, pady=8)
+        log_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        self.ax.clear()
-        x_values = self.df[self.current_x]
-        y_values = self.df[self.current_y]
+        self.txt_log = scrolledtext.ScrolledText(log_frame, height=16, state="disabled")
+        self.txt_log.pack(fill="both", expand=True)
 
-        match ptype:
-            case PlotType.LINEA.value:
+        # Estado de webcam
+        self.webcam_running = False
+        self.webcam_thread = None
 
-                self.ax.plot(x_values,y_values, label=self.current_label)
-                for x,y in zip(x_values, y_values):
-                    self.ax.text(x,y,str(y))
-            case PlotType.BARRA.value:
-                bars = self.ax.bar(x_values, y_values, label=self.current_label)
-                self.ax.bar_label(bars, label_type="center")
-        self.ax.set_xlabel(self.current_x)
-        self.ax.set_ylabel(self.current_y)
-#       self.ax.legend()
-#        self.fig.tight_layout()
-        self.canvas.draw()
+        # Precarga de encodings (si aplica)
+        try:
+            safe_regenerate_encodings(DATABASE_PATH, text_sink=lambda m: print_to_log(self.txt_log, m))
+        except Exception as e:
+            messagebox.showwarning("Advertencia", f"No se pudieron generar encodings inicialmente.\n{e}")
 
-    def update_graph_with_new_data(self, pymedata):
-        match pymedata:
-            case PymeData.PRODUCCION:
-                self.set_graph_produccion()
-            case PymeData.GANANCIAS:
-                self.set_graph_ganancias()
-            case PymeData.PERDIDAS:
-                self.set_graph_perdidas()
-            case PymeData.VENTAS:
-                self.set_graph_ventas()
-            case PymeData.PRECIOS_INSUMOS:
-                self.set_graph_precios_insumos()
-            case PymeData.STOCK:
-                self.set_graph_stock()
+        # Tip inicial
+        print_to_log(self.txt_log, "Sugerencia: añadí imágenes válidas en tests/db_images para armar la base.\n")
 
-        self.show_graph_with_new_plot_type(self.plot_type_var.get())
+    # -------- Agregar usuarios --------
+    def add_users(self):
+        files = filedialog.askopenfilenames(
+            title="Seleccioná una o varias imágenes para agregar a la base",
+            filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.webp"), ("Todos", "*.*")]
+        )
+        if not files:
+            return
 
-    def _test_reset_graph(self):
-        self.current_x = None
-        self.current_y = None
+        person_name = simpledialog.askstring(
+            "Nombre de persona",
+            "Ingresá un nombre/alias para etiquetar estas imágenes (se usará como prefijo de archivo):"
+        )
+        if not person_name:
+            messagebox.showinfo("Acción cancelada", "No se especificó un nombre. Operación cancelada.")
+            return
 
-    def set_graph_produccion(self):
-        self._test_reset_graph()
+        # Copiar con nombres únicos
+        copied = 0
+        for i, src in enumerate(files, start=1):
+            ext = os.path.splitext(src)[1].lower()
+            if ext not in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
+                continue
+            # Nombre destino
+            dst_name = f"{person_name}_{i:03d}{ext}"
+            dst_path = os.path.join(DATABASE_PATH, dst_name)
+            # Evitar overwrite
+            idx = i
+            while os.path.exists(dst_path):
+                idx += 1
+                dst_name = f"{person_name}_{idx:03d}{ext}"
+                dst_path = os.path.join(DATABASE_PATH, dst_name)
 
-    def set_graph_ganancias(self):
-        self._test_reset_graph()
+            try:
+                shutil.copy2(src, dst_path)
+                copied += 1
+            except Exception as e:
+                print_to_log(self.txt_log, f"Error copiando {src}: {e}\n")
 
-    def set_graph_perdidas(self):
-        self._test_reset_graph()
+        print_to_log(self.txt_log, f"Copiadas {copied} imágenes a {DATABASE_PATH}\n")
 
-    def set_graph_ventas(self):
-        self._test_reset_graph()
+        # Preguntar si desea regenerar encodings ahora
+        if copied > 0:
+            if messagebox.askyesno("Encodings", "¿Regenerar encodings ahora? (recomendado)"):
+                try:
+                    safe_regenerate_encodings(DATABASE_PATH, text_sink=lambda m: print_to_log(self.txt_log, m))
+                except Exception as e:
+                    messagebox.showerror("Error", f"Fallo al regenerar encodings: {e}")
 
-    def set_graph_stock(self):
-        self.df = pd.read_excel(self.excel_file, sheet_name="Empleados", header=10, usecols="A:C",nrows=6)
-        self.current_x = self.df.columns[1]
-        self.current_y = self.df.columns[2]
-        self.current_label = "Stock"
+    # -------- Webcam (captura y comparación) --------
+    def run_webcam_threaded(self):
+        if self.webcam_running:
+            messagebox.showinfo("Webcam", "La captura por webcam ya se está ejecutando.\nCerrá la ventana de video (tecla 'q') para detenerla.")
+            return
+        self.webcam_thread = threading.Thread(target=self._webcam_loop, daemon=True)
+        self.webcam_thread.start()
 
-    def set_graph_precios_insumos(self):
-        self.df = pd.read_excel(self.excel_file, sheet_name="Insumos")
-        self.current_x = self.df.columns[1]
-        self.current_y = self.df.columns[3]
-        self.current_label = "Insumos"
+    def _webcam_loop(self):
+        """
+        Obtiene frames, extrae encoding (normalizado) y compara contra la base.
+        Cerrar con la tecla 'q' en la ventana de OpenCV.
+        """
+        self.webcam_running = True
+        try:
+            # Preparar encodings guardados
+            u_rec._save_encodings_if_necessary(DATABASE_PATH)
+            saved_encodings = filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
 
-def main():
-    root = tk.Tk()
-    visualizer = PymeDataVisualizer(root)
-    root.mainloop()
+            if not saved_encodings:
+                print_to_log(self.txt_log, "Aviso: la base está vacía o sin encodings válidos.\n")
 
+            video_capture = cv2.VideoCapture(0)
+            if not video_capture.isOpened():
+                messagebox.showerror("Webcam", "No se pudo abrir la cámara.")
+                self.webcam_running = False
+                return
+
+            while True:
+                ret, frame = video_capture.read()
+                if not ret:
+                    break
+
+                small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+                encoding = normalize_encoding(u_rec.get_face_encoding_from_opencv_frame(small_frame))
+
+                if encoding is not None:
+                    any_match = False
+                    for file_name, other_encoding in saved_encodings.items():
+                        if other_encoding is None:
+                            print_to_log(self.txt_log, f"[AVISO] {file_name} no tiene encoding válido.\n")
+                            continue
+                        try:
+                            d, are_the_same = u_rec.comparison(encoding, other_encoding)
+                        except Exception as e:
+                            print_to_log(self.txt_log, f"[ERROR] Comparando con {file_name}: {e}\n")
+                            continue
+                        if are_the_same:
+                            any_match = True
+                            print_to_log(self.txt_log, f"Match con {file_name}. Distancia = {d:.4f} (umbral ~ {self.threshold_var.get():.2f})\n")
+                    if not any_match:
+                        print_to_log(self.txt_log, "Sin coincidencias en este frame.\n")
+
+                cv2.imshow("Presioná 'q' para salir", frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+            video_capture.release()
+            cv2.destroyAllWindows()
+        except Exception as e:
+            messagebox.showerror("Error en webcam", str(e))
+        finally:
+            self.webcam_running = False
+
+    # -------- Comparar desde una imagen --------
+    def compare_from_image(self):
+        img_path = filedialog.askopenfilename(
+            title="Seleccioná una imagen para comparar",
+            initialdir=os.path.dirname(TEST_IMAGE_PATH_DEFAULT) if os.path.exists(TEST_IMAGE_PATH_DEFAULT) else ".",
+            filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.webp"), ("Todos", "*.*")]
+        )
+        if not img_path:
+            return
+        print_to_log(self.txt_log, f"Imagen seleccionada: {img_path}\n")
+
+        try:
+            u_rec._save_encodings_if_necessary(DATABASE_PATH)
+            database_encodings = filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
+
+            main_img_encoding = normalize_encoding(u_rec.get_face_encoding_from_image_path(img_path))
+            if main_img_encoding is None:
+                print_to_log(self.txt_log, "No se detectó un rostro válido en la imagen.\n")
+                return
+
+            matches = []
+            for file_name, person_encoding in database_encodings.items():
+                if person_encoding is None:
+                    print_to_log(self.txt_log, f"[AVISO] {file_name} no tiene encoding válido.\n")
+                    continue
+                try:
+                    d, same_person = u_rec.comparison(main_img_encoding, person_encoding)
+                except Exception as e:
+                    print_to_log(self.txt_log, f"[ERROR] Comparando con {file_name}: {e}\n")
+                    continue
+                if same_person:
+                    matches.append((os.path.join(DATABASE_PATH, file_name), d))
+
+            if matches:
+                print_to_log(self.txt_log, f"¡Coincidencias encontradas con {os.path.basename(img_path)}!\n")
+                for f, dist in sorted(matches, key=lambda x: x[1]):
+                    print_to_log(self.txt_log, f"  {os.path.basename(f)} | distancia = {dist:.4f} (umbral ~ {self.threshold_var.get():.2f})\n")
+            else:
+                print_to_log(self.txt_log, "No se encontraron coincidencias.\n")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Ocurrió un problema al comparar: {e}")
+
+    # -------- Regenerar encodings manualmente --------
+    def rebuild_encodings(self):
+        try:
+            safe_regenerate_encodings(DATABASE_PATH, text_sink=lambda m: print_to_log(self.txt_log, m))
+            messagebox.showinfo("Listo", "Encodings regenerados.")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudieron regenerar encodings: {e}")
+
+    # -------- Detectar imágenes sin encoding --------
+    def check_bad_images(self):
+        try:
+            bad = find_invalid_db_images()
+            if bad:
+                print_to_log(self.txt_log, "Imágenes sin encoding (reemplazar o borrar):\n")
+                for b in bad:
+                    print_to_log(self.txt_log, f"  - {b}\n")
+            else:
+                print_to_log(self.txt_log, "No hay imágenes problemáticas en la base.\n")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo verificar la base: {e}")
+
+
+# ---------------- Main ----------------
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    app = FaceApp(root)
+    root.mainloop()

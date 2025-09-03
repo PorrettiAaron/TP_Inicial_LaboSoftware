@@ -1,7 +1,7 @@
-import tkinter as tk
-from gui import FaceApp
+# app.py
+# Punto de entrada para la GUI moderna
+from modern_gui import ModernFaceApp
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = FaceApp(root)
-    root.mainloop()
+    app = ModernFaceApp()
+    app.mainloop()

@@ -28,7 +28,7 @@ from tkinter import filedialog, messagebox
 # - get_face_encoding(np.ndarray | path) -> vector | [vector] | None
 # - comparison(encoding_a, encoding_b) -> (distance: float, same_person: bool)
 import src.utils_recognition as u_rec  # noqa: E402
-from src.utils_recognition import ACCEPTABLE_IMAGE_EXTENSIONS
+from src.utils_recognition import ACCEPTABLE_IMAGE_EXTENSIONS, MultipleFacesDetectedException
 
 import helpers
 
@@ -232,6 +232,10 @@ class ModernFaceApp(ctk.CTk):
                     self._safe_log(f"  - {f} | distancia = {dist:.4f} (umbral ~ {self.threshold_var.get():.2f})")
             else:
                 self._safe_log("No se encontraron coincidencias.")
+
+        except MultipleFacesDetectedException:
+             self._safe_log(f"[ERROR] Se detectó más de una cara en la imagen seleccionada. Por favor, use una imagen que contenga la cara de una sola persona.")
+
         except Exception as e:
             messagebox.showerror("Error", f"Ocurrió un problema al comparar: {e}")
 
@@ -301,8 +305,8 @@ class ModernFaceApp(ctk.CTk):
         try:
             enc = u_rec.get_face_encoding_from_opencv_frame(process_small)
 
-        except u_rec.MultipleFacesDetectedException:
-             self._safe_log(f"[ERROR] Se detectó más de una cara en cámara, por favor, limite a una persona a la vez.")
+        except MultipleFacesDetectedException:
+             self._safe_log(f"[ERROR] Se detectó más de una cara en cámara. Por favor, limite a una persona a la vez.")
              enc = None
 
         if enc is not None and self.db_encs:

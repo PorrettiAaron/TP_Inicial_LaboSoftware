@@ -25,18 +25,6 @@ def safe_regenerate_encodings(database_path: str, text_sink=None):
         text_sink("Encodings listos.\n")
 
 
-def normalize_encoding(enc):
-    """
-    Acepta vector, lista/tupla de vectores o None.
-    Devuelve: vector o None.
-    """
-    if enc is None:
-        return None
-    if isinstance(enc, (list, tuple)):
-        return enc[0] if len(enc) > 0 else None
-    return enc
-
-
 def filtered_db_encodings(db_dict):
     """
     Quita entradas None o vacías, y normaliza listas/tuplas a vector.
@@ -47,9 +35,8 @@ def filtered_db_encodings(db_dict):
             continue
         if isinstance(v, (list, tuple)) and len(v) == 0:
             continue
-        cleaned[k] = normalize_encoding(v)
+        cleaned[k] = v
     return cleaned
-
 
 def find_invalid_db_images():
     """
@@ -59,7 +46,6 @@ def find_invalid_db_images():
     encs = u_rec.get_saved_encodings(DATABASE_PATH)
     bad = []
     for name, enc in encs.items():
-        enc = normalize_encoding(enc)
         if enc is None:
             bad.append(name)
     return bad

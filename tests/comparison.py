@@ -7,7 +7,7 @@ database_path = "./tests/db_images/"
 u_rec._save_encodings_if_necessary(database_path)
 database_encodings = u_rec.get_saved_encodings(database_path)
 
-main_img_encoding = u_rec.get_face_encoding_from_image_path(main_img)
+main_img_encoding = u_rec.get_face_encoding(main_img)
 matches = []
 
 for file_name, person_encoding in database_encodings.items():

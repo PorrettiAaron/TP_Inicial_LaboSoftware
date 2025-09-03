@@ -25,33 +25,15 @@ from tkinter import filedialog, messagebox
 # - _save_encodings_if_necessary(db_path)
 # - get_saved_encodings(db_path) -> dict[str, np.ndarray | list | None]
 # - get_face_encoding_from_opencv_frame(frame_bgr|rgb) -> vector | [vector] | None
-# - get_face_encoding_from_image_path(path) -> vector | [vector] | None
+# - get_face_encoding(np.ndarray | path) -> vector | [vector] | None
 # - comparison(encoding_a, encoding_b) -> (distance: float, same_person: bool)
 import src.utils_recognition as u_rec  # noqa: E402
+from src.utils_recognition import ACCEPTABLE_IMAGE_EXTENSIONS
 
+import helpers
 
 DATABASE_PATH = "./tests/db_images/"
 os.makedirs(DATABASE_PATH, exist_ok=True)
-
-
-def normalize_encoding(enc):
-    if enc is None:
-        return None
-    if isinstance(enc, (list, tuple)):
-        return enc[0] if len(enc) > 0 else None
-    return enc
-
-
-def filtered_db_encodings(db_dict):
-    cleaned = {}
-    for k, v in db_dict.items():
-        if v is None:
-            continue
-        if isinstance(v, (list, tuple)) and len(v) == 0:
-            continue
-        cleaned[k] = normalize_encoding(v)
-    return cleaned
-
 
 class ModernFaceApp(ctk.CTk):
     def __init__(self):
@@ -65,7 +47,7 @@ class ModernFaceApp(ctk.CTk):
         self.webcam_running = False
         self.cap = None
         self.video_loop_job = None
-        self.threshold_var = ctk.DoubleVar(value=0.60)
+        self.threshold_var = ctk.DoubleVar(value=u_rec.EUCLIDEAN_DISTANCE_TOLERANCE)
 
         # Layout: sidebar (izq) / main (centro) / right (log)
         self.grid_columnconfigure(0, weight=0)  # sidebar
@@ -108,7 +90,7 @@ class ModernFaceApp(ctk.CTk):
         # Threshold
         thr_label = ctk.CTkLabel(self.sidebar, text="Umbral (referencia)")
         thr_label.pack(padx=16, pady=(16,4))
-        self.thr_scale = ctk.CTkSlider(self.sidebar, from_=0.2, to=1.2, number_of_steps=100, variable=self.threshold_var)
+        self.thr_scale = ctk.CTkSlider(self.sidebar, from_=0.0, to=1.0, number_of_steps=100, variable=self.threshold_var)
         self.thr_scale.pack(padx=16, pady=(0,10), fill="x")
 
         # Tema
@@ -175,7 +157,8 @@ class ModernFaceApp(ctk.CTk):
     # ---------- Actions ----------
     def on_add_users(self):
         paths = filedialog.askopenfilenames(title="Seleccioná imágenes de usuarios",
-                                            filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.webp")])
+            filetypes=[("Imágenes", " ".join("*.{}".format(ext) for ext in ACCEPTABLE_IMAGE_EXTENSIONS)), ("Todos", "*.*")])
+
         if not paths:
             return
 
@@ -189,15 +172,15 @@ class ModernFaceApp(ctk.CTk):
         copied = 0
         os.makedirs(DATABASE_PATH, exist_ok=True)
         for i, src in enumerate(paths, start=1):
-            ext = os.path.splitext(src)[1].lower()
-            if ext not in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
+            ext = os.path.splitext(src)[1][1:]
+            if not u_rec.is_valid_image_extension(ext):
                 continue
-            dst_name = f"{person_name}_{i:03d}{ext}"
+            dst_name = f"{person_name}_{i:03d}.{ext}"
             dst_path = os.path.join(DATABASE_PATH, dst_name)
             idx = i
             while os.path.exists(dst_path):
                 idx += 1
-                dst_name = f"{person_name}_{idx:03d}{ext}"
+                dst_name = f"{person_name}_{idx:03d}.{ext}"
                 dst_path = os.path.join(DATABASE_PATH, dst_name)
             try:
                 # copiar binario
@@ -214,26 +197,29 @@ class ModernFaceApp(ctk.CTk):
 
     def on_compare_from_image(self):
         img_path = filedialog.askopenfilename(title="Seleccioná una imagen",
-                                              filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.webp")])
+            filetypes=[("Imágenes", " ".join("*.{}".format(ext) for ext in ACCEPTABLE_IMAGE_EXTENSIONS))])
+
         if not img_path:
             return
 
         self._safe_log(f"Imagen seleccionada: {img_path}")
         try:
             u_rec._save_encodings_if_necessary(DATABASE_PATH)
-            db_encs = filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
+            db_encs = helpers.filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
 
-            main_enc = normalize_encoding(u_rec.get_face_encoding_from_image_path(img_path))
+            main_enc = u_rec.get_face_encoding(img_path)
             if main_enc is None:
                 self._safe_log("No se detectó un rostro válido en la imagen.")
                 return
+
+            self._safe_log("Comparando {img_path} con las imágenes de la base de datos...")
 
             matches = []
             for fname, person_enc in db_encs.items():
                 if person_enc is None:
                     continue
                 try:
-                    d, same = u_rec.comparison(main_enc, person_enc)
+                    d, same = u_rec.comparison(main_enc, person_enc, tolerance=self.threshold_var.get())
                 except Exception as e:
                     self._safe_log(f"[ERROR] Comparando con {fname}: {e}")
                     continue
@@ -259,18 +245,13 @@ class ModernFaceApp(ctk.CTk):
 
     def on_check_bad_images(self):
         try:
-            u_rec._save_encodings_if_necessary(DATABASE_PATH)
-            all_encs = u_rec.get_saved_encodings(DATABASE_PATH)
-            bad = []
-            for name, enc in all_encs.items():
-                if normalize_encoding(enc) is None:
-                    bad.append(name)
-            if bad:
-                self._safe_log("Imágenes sin encoding (reemplazar o borrar):")
-                for b in bad:
-                    self._safe_log(f"  - {b}")
-            else:
+            bad_files = helpers.find_invalid_db_images()
+            if not bad_files:
                 self._safe_log("No hay imágenes problemáticas en la base.")
+            else:
+                self._safe_log("Imágenes sin encoding (reemplazar o borrar):")
+                for b in bad_files:
+                    self._safe_log(f"  - {b}")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo verificar la base: {e}")
 
@@ -287,7 +268,7 @@ class ModernFaceApp(ctk.CTk):
         # Pre-cargar encodings
         try:
             u_rec._save_encodings_if_necessary(DATABASE_PATH)
-            self.db_encs = filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
+            self.db_encs = helpers.filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
         except Exception as e:
             self._safe_log(f"[ADVERTENCIA] No se pudo preparar la base: {e}")
             self.db_encs = {}
@@ -317,7 +298,12 @@ class ModernFaceApp(ctk.CTk):
 
         # Obtener encoding (tu función puede esperar BGR o RGB; si requiere RGB, descomentar siguiente línea)
         # process_small = cv2.cvtColor(process_small, cv2.COLOR_BGR2RGB)
-        enc = normalize_encoding(u_rec.get_face_encoding_from_opencv_frame(process_small))
+        try:
+            enc = u_rec.get_face_encoding_from_opencv_frame(process_small)
+
+        except u_rec.MultipleFacesDetectedException:
+             self._safe_log(f"[ERROR] Se detectó más de una cara en cámara, por favor, limite a una persona a la vez.")
+             enc = None
 
         if enc is not None and self.db_encs:
             any_match = False

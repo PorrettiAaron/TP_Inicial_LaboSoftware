@@ -1,11 +1,12 @@
 # modern_gui.py
 # GUI moderna con CustomTkinter + OpenCV embebido
+# - Automatiza ENTRADA/SALIDA con PresenceManager
+# - Mapea archivos de rostros a legajo en SQLite
 # Requiere: customtkinter, pillow, opencv-python
-import os
-import threading
-import time
 
+import os
 import cv2
+
 import numpy as np
 
 try:
@@ -25,17 +26,37 @@ from tkinter import filedialog, messagebox
 # - _save_encodings_if_necessary(db_path)
 # - get_saved_encodings(db_path) -> dict[str, np.ndarray | list | None]
 # - get_face_encoding_from_opencv_frame(frame_bgr|rgb) -> vector | [vector] | None
-# - get_face_encoding(np.ndarray | path) -> vector | [vector] | None
+# - get_face_encoding_from_image_path(path) -> vector | [vector] | None
 # - comparison(encoding_a, encoding_b) -> (distance: float, same_person: bool)
-import src.utils_recognition as u_rec  # noqa: E402
-from src.utils_recognition import ACCEPTABLE_IMAGE_EXTENSIONS, MultipleFacesDetectedException
-
-import helpers
+import utils_recognition as u_rec  # en tu repo actual el módulo se llama utils_recognition.py
 import utils_db
+from presence import PresenceManager
 
 DATABASE_PATH = "./tests/db_images/"
 os.makedirs(DATABASE_PATH, exist_ok=True)
 
+
+# ---------------- Utilidades locales ----------------
+def normalize_encoding(enc):
+    if enc is None:
+        return None
+    if isinstance(enc, (list, tuple)):
+        return enc[0] if len(enc) > 0 else None
+    return enc
+
+
+def filtered_db_encodings(db_dict):
+    cleaned = {}
+    for k, v in db_dict.items():
+        if v is None:
+            continue
+        if isinstance(v, (list, tuple)) and len(v) == 0:
+            continue
+        cleaned[k] = normalize_encoding(v)
+    return cleaned
+
+
+# ---------------- Aplicación ----------------
 class ModernFaceApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -48,7 +69,16 @@ class ModernFaceApp(ctk.CTk):
         self.webcam_running = False
         self.cap = None
         self.video_loop_job = None
-        self.threshold_var = ctk.DoubleVar(value=u_rec.EUCLIDEAN_DISTANCE_TOLERANCE)
+        self.threshold_var = ctk.DoubleVar(value=0.60)
+
+        # Presence automation
+        self.presence = PresenceManager(
+            on_event=self._on_presence_event,
+            appear_threshold=3,
+            window_seconds=2.0,
+            disappear_seconds=10.0,
+            cooldown_seconds=30.0,
+        )
 
         # Layout: sidebar (izq) / main (centro) / right (log)
         self.grid_columnconfigure(0, weight=0)  # sidebar
@@ -60,13 +90,12 @@ class ModernFaceApp(ctk.CTk):
         self._build_main()
         self._build_right_panel()
 
-        # Inicializar DB y luego generar encodings
+        # Inicializar DB y encodings
         try:
             utils_db.ensure_db_seeded()
         except Exception as e:
             self._safe_log(f"[DB] No se pudo preparar la DB: {e}")
 
-        # Inicial: generar encodings si hace falta
         self._safe_log("Generando/actualizando encodings de la base...")
         try:
             u_rec._save_encodings_if_necessary(DATABASE_PATH)
@@ -97,7 +126,7 @@ class ModernFaceApp(ctk.CTk):
         # Threshold
         thr_label = ctk.CTkLabel(self.sidebar, text="Umbral (referencia)")
         thr_label.pack(padx=16, pady=(16,4))
-        self.thr_scale = ctk.CTkSlider(self.sidebar, from_=0.0, to=1.0, number_of_steps=100, variable=self.threshold_var)
+        self.thr_scale = ctk.CTkSlider(self.sidebar, from_=0.2, to=1.2, number_of_steps=100, variable=self.threshold_var)
         self.thr_scale.pack(padx=16, pady=(0,10), fill="x")
 
         # Tema
@@ -147,10 +176,9 @@ class ModernFaceApp(ctk.CTk):
         self.log_txt.grid(row=2, column=0, sticky="nswe", padx=12, pady=(6,12))
 
         # Quick clear
-        btn_clear = ctk.CTkButton(self.right, text="Limpiar log", command=lambda: self.log_txt.delete("1.0", "end"), fg_color="#444", hover_color="#666")
-        btn_clear.grid(row=3, column=0, sticky="we", padx=12, pady=(0,12))
+        ctk.CTkButton(self.right, text="Limpiar log", command=lambda: self.log_txt.delete("1.0", "end"), fg_color="#444", hover_color="#666").grid(row=3, column=0, sticky="we", padx=12, pady=(0,12))
 
-    # ---------- Helpers ----------
+    # ---------- Helpers GUI ----------
     def _safe_log(self, text):
         try:
             self.log_txt.insert("end", text + ("\n" if not text.endswith("\n") else ""))
@@ -161,94 +189,126 @@ class ModernFaceApp(ctk.CTk):
     def _on_theme_change(self, mode):
         ctk.set_appearance_mode(mode)
 
+    # ---------- Resolución de legajo ----------
     def _extract_legajo_from_key(self, key: str):
         import os
         base = os.path.splitext(key)[0]
         return int(base) if str(base).isdigit() else None
 
+    def _resolve_legajo_from_fname(self, fname: str):
+        # 1) Si el nombre del archivo es un número → legajo directo
+        leg = self._extract_legajo_from_key(fname)
+        if leg is not None:
+            return leg
+        # 2) Intentar buscar mapeo en DB
+        try:
+            with utils_db.get_connection() as conn:
+                cur = conn.cursor()
+                mapped = utils_db.get_legajo_for_filename(cur, fname)
+                if mapped is not None:
+                    return mapped
+        except Exception:
+            pass
+        return None
+
+    # ---------- Presence callback ----------
+    def _on_presence_event(self, evento: str, legajo: int, t: float):
+        """Callback de PresenceManager → registra en DB y loguea."""
+        import datetime
+        ts = datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            with utils_db.get_connection() as conn:
+                cur = conn.cursor()
+                utils_db.empleado_detected(cur, legajo)
+            self._safe_log(f"[DB] Legajo {legajo}: {evento.upper()} registrada a las {ts}")
+        except Exception as e:
+            self._safe_log(f"[DB][ERROR] No se pudo registrar {evento} para legajo {legajo}: {e}")
+
     # ---------- Actions ----------
     def on_add_users(self):
         paths = filedialog.askopenfilenames(title="Seleccioná imágenes de usuarios",
-            filetypes=[("Imágenes", " ".join("*.{}".format(ext) for ext in ACCEPTABLE_IMAGE_EXTENSIONS)), ("Todos", "*.*")])
-
+                                            filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.webp")])
         if not paths:
             return
 
-        # Pedir nombre:
-        dlg = ctk.CTkInputDialog(text="Ingresá nombre/alias para las imágenes:", title="Agregar usuarios")
-        person_name = dlg.get_input()
+        # Pedir alias para renombrar
+        dlg_name = ctk.CTkInputDialog(text="Ingresá nombre/alias para etiquetar estas imágenes:", title="Agregar usuarios")
+        person_name = dlg_name.get_input()
         if not person_name:
-            messagebox.showinfo("Info", "Operación cancelada: no se indicó nombre.")
+            messagebox.showinfo("Info", "Operación cancelada: no se indicó alias.")
             return
 
         copied = 0
         os.makedirs(DATABASE_PATH, exist_ok=True)
+        new_files = []
         for i, src in enumerate(paths, start=1):
-            ext = os.path.splitext(src)[1][1:]
-            if not u_rec.is_valid_image_extension(ext):
+            ext = os.path.splitext(src)[1].lower()
+            if ext not in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
                 continue
-            dst_name = f"{person_name}_{i:03d}.{ext}"
+            dst_name = f"{person_name}_{i:03d}{ext}"
             dst_path = os.path.join(DATABASE_PATH, dst_name)
             idx = i
             while os.path.exists(dst_path):
                 idx += 1
-                dst_name = f"{person_name}_{idx:03d}.{ext}"
+                dst_name = f"{person_name}_{idx:03d}{ext}"
                 dst_path = os.path.join(DATABASE_PATH, dst_name)
             try:
-                # copiar binario
                 with open(src, "rb") as fi, open(dst_path, "wb") as fo:
                     fo.write(fi.read())
                 copied += 1
+                new_files.append(dst_name)
             except Exception as e:
                 self._safe_log(f"[ERROR] Copiando {src}: {e}")
 
         self._safe_log(f"Copiadas {copied} imágenes a {DATABASE_PATH}")
+
         if copied > 0:
+            # Mapear a legajo
+            try:
+                dlg_leg = ctk.CTkInputDialog(text="Ingresá NÚMERO de legajo para asociar estas imágenes:", title="Mapear legajo")
+                leg_str = dlg_leg.get_input()
+                if leg_str and leg_str.isdigit():
+                    legajo = int(leg_str)
+                    with utils_db.get_connection() as conn:
+                        cur = conn.cursor()
+                        for fname in new_files:
+                            utils_db.add_face_mapping(cur, fname, legajo)
+                    self._safe_log(f"Asociadas {copied} imágenes al legajo {legajo}.")
+                else:
+                    self._safe_log("No se ingresó un legajo válido; no se guardó mapeo.")
+            except Exception as e:
+                self._safe_log(f"[DB][ERROR] Mapeando legajo: {e}")
+
             if messagebox.askyesno("Encodings", "¿Regenerar encodings ahora?"):
                 self.on_rebuild_encodings()
 
     def on_compare_from_image(self):
         img_path = filedialog.askopenfilename(title="Seleccioná una imagen",
-            filetypes=[("Imágenes", " ".join("*.{}".format(ext) for ext in ACCEPTABLE_IMAGE_EXTENSIONS))])
-
+                                              filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.webp")])
         if not img_path:
             return
 
         self._safe_log(f"Imagen seleccionada: {img_path}")
         try:
             u_rec._save_encodings_if_necessary(DATABASE_PATH)
-            db_encs = helpers.filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
+            db_encs = filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
 
-            main_enc = u_rec.get_face_encoding(img_path)
+            main_enc = normalize_encoding(u_rec.get_face_encoding_from_image_path(img_path))
             if main_enc is None:
                 self._safe_log("No se detectó un rostro válido en la imagen.")
                 return
-
-            self._safe_log("Comparando {img_path} con las imágenes de la base de datos...")
 
             matches = []
             for fname, person_enc in db_encs.items():
                 if person_enc is None:
                     continue
                 try:
-                    d, same = u_rec.comparison(main_enc, person_enc, tolerance=self.threshold_var.get())
+                    d, same = u_rec.comparison(main_enc, person_enc)
                 except Exception as e:
                     self._safe_log(f"[ERROR] Comparando con {fname}: {e}")
                     continue
                 if same:
                     matches.append((fname, d))
-                    leg = self._extract_legajo_from_key(fname)
-                    if leg is not None:
-                        try:
-                            with utils_db.get_connection() as conn:
-                                cur = conn.cursor()
-                                res = utils_db.empleado_detected(cur, leg)
-                            if res['status'] == 'entrada':
-                                self._safe_log(f"[DB] Legajo {leg}: ENTRADA registrada a las {res['timestamp']}")
-                            else:
-                                self._safe_log(f"[DB] Legajo {leg}: SALIDA registrada a las {res['timestamp']} (entrada {res['entrada']})")
-                        except Exception as e:
-                            self._safe_log(f"[DB][ERROR] No se pudo registrar asistencia para legajo {leg}: {e}")
 
             if matches:
                 self._safe_log("¡Coincidencias encontradas!")
@@ -256,10 +316,6 @@ class ModernFaceApp(ctk.CTk):
                     self._safe_log(f"  - {f} | distancia = {dist:.4f} (umbral ~ {self.threshold_var.get():.2f})")
             else:
                 self._safe_log("No se encontraron coincidencias.")
-
-        except MultipleFacesDetectedException:
-             self._safe_log(f"[ERROR] Se detectó más de una cara en la imagen seleccionada. Por favor, use una imagen que contenga la cara de una sola persona.")
-
         except Exception as e:
             messagebox.showerror("Error", f"Ocurrió un problema al comparar: {e}")
 
@@ -273,13 +329,18 @@ class ModernFaceApp(ctk.CTk):
 
     def on_check_bad_images(self):
         try:
-            bad_files = helpers.find_invalid_db_images()
-            if not bad_files:
-                self._safe_log("No hay imágenes problemáticas en la base.")
-            else:
+            u_rec._save_encodings_if_necessary(DATABASE_PATH)
+            all_encs = u_rec.get_saved_encodings(DATABASE_PATH)
+            bad = []
+            for name, enc in all_encs.items():
+                if normalize_encoding(enc) is None:
+                    bad.append(name)
+            if bad:
                 self._safe_log("Imágenes sin encoding (reemplazar o borrar):")
-                for b in bad_files:
+                for b in bad:
                     self._safe_log(f"  - {b}")
+            else:
+                self._safe_log("No hay imágenes problemáticas en la base.")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo verificar la base: {e}")
 
@@ -287,7 +348,6 @@ class ModernFaceApp(ctk.CTk):
     def on_start_webcam(self):
         if self.webcam_running:
             return
-        # Abrimos la cámara
         self.cap = cv2.VideoCapture(0)
         if not self.cap.isOpened():
             messagebox.showerror("Webcam", "No se pudo abrir la cámara.")
@@ -296,7 +356,7 @@ class ModernFaceApp(ctk.CTk):
         # Pre-cargar encodings
         try:
             u_rec._save_encodings_if_necessary(DATABASE_PATH)
-            self.db_encs = helpers.filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
+            self.db_encs = filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
         except Exception as e:
             self._safe_log(f"[ADVERTENCIA] No se pudo preparar la base: {e}")
             self.db_encs = {}
@@ -323,17 +383,12 @@ class ModernFaceApp(ctk.CTk):
 
         # Redimensionar para procesamiento, mantener original para display
         process_small = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-
-        # Obtener encoding (tu función puede esperar BGR o RGB; si requiere RGB, descomentar siguiente línea)
+        # Si tu encoder requiere RGB, descomentar:
         # process_small = cv2.cvtColor(process_small, cv2.COLOR_BGR2RGB)
-        try:
-            enc = u_rec.get_face_encoding_from_opencv_frame(process_small)
 
-        except MultipleFacesDetectedException:
-             self._safe_log(f"[ERROR] Se detectó más de una cara en cámara. Por favor, limite a una persona a la vez.")
-             enc = None
+        enc = normalize_encoding(u_rec.get_face_encoding_from_opencv_frame(process_small))
 
-        if enc is not None and self.db_encs:
+        if enc is not None and getattr(self, "db_encs", {}):
             any_match = False
             for fname, other_enc in self.db_encs.items():
                 if other_enc is None:
@@ -346,28 +401,25 @@ class ModernFaceApp(ctk.CTk):
                 if same:
                     any_match = True
                     self._safe_log(f"Match con {fname} | d={d:.4f} (umbral ~ {self.threshold_var.get():.2f})")
-                    leg = self._extract_legajo_from_key(fname)
+                    # Resolver legajo y notificar presencia
+                    leg = self._resolve_legajo_from_fname(fname)
                     if leg is not None:
-                        try:
-                            with utils_db.get_connection() as conn:
-                                cur = conn.cursor()
-                                res = utils_db.empleado_detected(cur, leg)
-                            if res['status'] == 'entrada':
-                                self._safe_log(f"[DB] Legajo {leg}: ENTRADA registrada a las {res['timestamp']}")
-                            else:
-                                self._safe_log(f"[DB] Legajo {leg}: SALIDA registrada a las {res['timestamp']} (entrada {res['entrada']})")
-                        except Exception as e:
-                            self._safe_log(f"[DB][ERROR] No se pudo registrar asistencia para legajo {leg}: {e}")
+                        import time as _t
+                        self.presence.see(leg, _t.time())
             if not any_match:
                 self._safe_log("Sin coincidencias en este frame.")
 
-        # Mostrar en la UI (convertir a RGB)
+        # Mostrar en la UI (convertir a RGB para Pillow)
         display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(display)
         img = img.resize((900, 500), Image.LANCZOS)
         imgtk = ImageTk.PhotoImage(image=img)
         self.video_label.configure(image=imgtk, text="")
         self.video_label.imgtk_ref = imgtk  # evitar GC
+
+        # Procesar ausencias para disparar SALIDA automática
+        import time as _t
+        self.presence.process_timeouts(_t.time())
 
         self.video_loop_job = self.after(30, self._update_video_frame)
 

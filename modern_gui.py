@@ -31,6 +31,7 @@ import src.utils_recognition as u_rec  # noqa: E402
 from src.utils_recognition import ACCEPTABLE_IMAGE_EXTENSIONS, MultipleFacesDetectedException
 
 import helpers
+import utils_db
 
 DATABASE_PATH = "./tests/db_images/"
 os.makedirs(DATABASE_PATH, exist_ok=True)
@@ -58,6 +59,12 @@ class ModernFaceApp(ctk.CTk):
         self._build_sidebar()
         self._build_main()
         self._build_right_panel()
+
+        # Inicializar DB y luego generar encodings
+        try:
+            utils_db.ensure_db_seeded()
+        except Exception as e:
+            self._safe_log(f"[DB] No se pudo preparar la DB: {e}")
 
         # Inicial: generar encodings si hace falta
         self._safe_log("Generando/actualizando encodings de la base...")
@@ -154,6 +161,11 @@ class ModernFaceApp(ctk.CTk):
     def _on_theme_change(self, mode):
         ctk.set_appearance_mode(mode)
 
+    def _extract_legajo_from_key(self, key: str):
+        import os
+        base = os.path.splitext(key)[0]
+        return int(base) if str(base).isdigit() else None
+
     # ---------- Actions ----------
     def on_add_users(self):
         paths = filedialog.askopenfilenames(title="Seleccioná imágenes de usuarios",
@@ -225,6 +237,18 @@ class ModernFaceApp(ctk.CTk):
                     continue
                 if same:
                     matches.append((fname, d))
+                    leg = self._extract_legajo_from_key(fname)
+                    if leg is not None:
+                        try:
+                            with utils_db.get_connection() as conn:
+                                cur = conn.cursor()
+                                res = utils_db.empleado_detected(cur, leg)
+                            if res['status'] == 'entrada':
+                                self._safe_log(f"[DB] Legajo {leg}: ENTRADA registrada a las {res['timestamp']}")
+                            else:
+                                self._safe_log(f"[DB] Legajo {leg}: SALIDA registrada a las {res['timestamp']} (entrada {res['entrada']})")
+                        except Exception as e:
+                            self._safe_log(f"[DB][ERROR] No se pudo registrar asistencia para legajo {leg}: {e}")
 
             if matches:
                 self._safe_log("¡Coincidencias encontradas!")
@@ -322,6 +346,18 @@ class ModernFaceApp(ctk.CTk):
                 if same:
                     any_match = True
                     self._safe_log(f"Match con {fname} | d={d:.4f} (umbral ~ {self.threshold_var.get():.2f})")
+                    leg = self._extract_legajo_from_key(fname)
+                    if leg is not None:
+                        try:
+                            with utils_db.get_connection() as conn:
+                                cur = conn.cursor()
+                                res = utils_db.empleado_detected(cur, leg)
+                            if res['status'] == 'entrada':
+                                self._safe_log(f"[DB] Legajo {leg}: ENTRADA registrada a las {res['timestamp']}")
+                            else:
+                                self._safe_log(f"[DB] Legajo {leg}: SALIDA registrada a las {res['timestamp']} (entrada {res['entrada']})")
+                        except Exception as e:
+                            self._safe_log(f"[DB][ERROR] No se pudo registrar asistencia para legajo {leg}: {e}")
             if not any_match:
                 self._safe_log("Sin coincidencias en este frame.")
 

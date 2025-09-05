@@ -28,8 +28,8 @@ from tkinter import filedialog, messagebox
 # - get_face_encoding_from_opencv_frame(frame_bgr|rgb) -> vector | [vector] | None
 # - get_face_encoding_from_image_path(path) -> vector | [vector] | None
 # - comparison(encoding_a, encoding_b) -> (distance: float, same_person: bool)
-import utils_recognition as u_rec  # en tu repo actual el módulo se llama utils_recognition.py
-import utils_db
+from src import utils_recognition as u_rec  # en tu repo actual el módulo se llama utils_recognition.py
+from src import utils_db
 from presence import PresenceManager
 
 DATABASE_PATH = "./tests/db_images/"

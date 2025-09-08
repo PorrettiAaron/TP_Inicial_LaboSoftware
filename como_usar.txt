@@ -12,3 +12,10 @@ deactivate
 venv_proyecto\Scripts\activate
 python -m unittest tests\file.py
 deactivate
+
+
+
+
+python app.py
+
+python -m tests.report_app

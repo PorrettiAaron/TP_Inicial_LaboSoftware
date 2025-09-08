@@ -5,17 +5,35 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "proyecto_profesional"
 version = "0.1.0"
-description = "Identificación de personal con reconociento facial para PYME San Ignacio"
+description = "Identificación de personal con reconocimiento facial para PYME San Ignacio"
 authors = [
-    {name="La Hermandad del Algoritmo"}
+    { name = "La Hermandad del Algoritmo" }
 ]
 
-requires-python="==3.11.*"
+# Python 3.11 es el recomendado por el wheel de dlib
+requires-python = "==3.11.*"
+
 dependencies = [
-  "opencv-python==4.9.0.80",
-  "numpy==1.26.3",
-  "face_recognition",
-  "customtkinter",
-  "Pillow",
-  "dlib @ https://github.com/z-mahmud22/Dlib_Windows_Python3.x/raw/main/dlib-19.24.1-cp311-cp311-win_amd64.whl"
+    # OpenCV (cv2)
+    "opencv-python==4.9.0.80",
+    # A veces se necesita contrib, si te faltan módulos extra
+    "opencv-contrib-python==4.9.0.80",
+
+    # NumPy
+    "numpy==1.26.3",
+
+    # Librería de reconocimiento facial (usa dlib internamente)
+    "face_recognition",
+
+    # GUI
+    "customtkinter",
+    "Pillow",
+
+    # Base de datos SQLite está en la stdlib, no hace falta agregar nada
+
+    # Dlib: wheel precompilado específico para Python 3.11 en Windows
+    "dlib @ https://github.com/z-mahmud22/Dlib_Windows_Python3.x/raw/main/dlib-19.24.1-cp311-cp311-win_amd64.whl"
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]

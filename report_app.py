@@ -1,19 +1,34 @@
-# report_app.py
+# tests/report_app.py
 # Pantalla de reportes (testing): visualiza tablas de la base y permite filtrar/exportar asistencias.
-# Requiere: customtkinter (UI). Usa sqlite3 estándar (no necesita pandas).
-# Ejecutar: python report_app.py
+# Ejecutar:
+#   - Recomendado:  python -m tests.report_app
+#   - Alternativo:  python tests\report_app.py
 
 import csv
 import sqlite3
+from pathlib import Path
 from tkinter import ttk, messagebox, filedialog
+import sys
+
+# --- Asegurar que el intérprete vea la raíz del proyecto y src/ ---
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 try:
     import customtkinter as ctk
 except ImportError as e:
     raise SystemExit("Falta 'customtkinter'. Instalá con: pip install customtkinter") from e
 
-import utils_db  # Usa PYME_DB y ensure_db_seeded()
-
+# Importar utils_db desde src/
+try:
+    from src import utils_db  # Usa PYME_DB y ensure_db_seeded()
+except Exception:
+    # fallback si no existe paquete src (por si en tu máquina está plano)
+    import utils_db  # type: ignore
 
 DB_PATH = utils_db.PYME_DB
 
@@ -173,7 +188,7 @@ class ReportApp(ctk.CTk):
             params.append(date_to)
 
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
-        sql = f"""\
+        sql = f"""
         SELECT a.legajo_empleado AS legajo,
                e.nombre,
                e.puesto,

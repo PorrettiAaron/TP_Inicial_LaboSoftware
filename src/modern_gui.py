@@ -27,9 +27,14 @@ from tkinter import filedialog, messagebox
 # - get_face_encoding_from_opencv_frame(frame_bgr|rgb) -> vector | [vector] | None
 # - get_face_encoding_from(np.ndarray | path) -> vector | [vector] | None
 # - comparison(encoding_a, encoding_b) -> (distance: float, same_person: bool)
+<<<<<<< HEAD:src/modern_gui.py
 import utils_recognition as u_rec  # en tu repo actual el módulo se llama utils_recognition.py
 import utils_db
 import utils_files
+=======
+from src import utils_recognition as u_rec  # en tu repo actual el módulo se llama utils_recognition.py
+from src import utils_db
+>>>>>>> 2712f4676a941bb50b89e902001af7a0e0030dbc:modern_gui.py
 from presence import PresenceManager
 
 DATABASE_PATH = utils_db.PYME_EMPLOYEES_IMAGES

@@ -6,7 +6,6 @@
 
 import os
 import cv2
-
 import numpy as np
 
 try:
@@ -26,35 +25,15 @@ from tkinter import filedialog, messagebox
 # - _save_encodings_if_necessary(db_path)
 # - get_saved_encodings(db_path) -> dict[str, np.ndarray | list | None]
 # - get_face_encoding_from_opencv_frame(frame_bgr|rgb) -> vector | [vector] | None
-# - get_face_encoding_from_image_path(path) -> vector | [vector] | None
+# - get_face_encoding_from(np.ndarray | path) -> vector | [vector] | None
 # - comparison(encoding_a, encoding_b) -> (distance: float, same_person: bool)
 import utils_recognition as u_rec  # en tu repo actual el módulo se llama utils_recognition.py
 import utils_db
+import utils_files
 from presence import PresenceManager
 
-DATABASE_PATH = "./tests/db_images/"
+DATABASE_PATH = utils_db.PYME_EMPLOYEES_IMAGES
 os.makedirs(DATABASE_PATH, exist_ok=True)
-
-
-# ---------------- Utilidades locales ----------------
-def normalize_encoding(enc):
-    if enc is None:
-        return None
-    if isinstance(enc, (list, tuple)):
-        return enc[0] if len(enc) > 0 else None
-    return enc
-
-
-def filtered_db_encodings(db_dict):
-    cleaned = {}
-    for k, v in db_dict.items():
-        if v is None:
-            continue
-        if isinstance(v, (list, tuple)) and len(v) == 0:
-            continue
-        cleaned[k] = normalize_encoding(v)
-    return cleaned
-
 
 # ---------------- Aplicación ----------------
 class ModernFaceApp(ctk.CTk):
@@ -69,13 +48,26 @@ class ModernFaceApp(ctk.CTk):
         self.webcam_running = False
         self.cap = None
         self.video_loop_job = None
-        self.threshold_var = ctk.DoubleVar(value=0.60)
+        self.threshold_var = ctk.DoubleVar(value=u_rec.EUCLIDEAN_DISTANCE_TOLERANCE)
+
+
+        # Utils de optimización
+        # scanear face encoding uno de cada (self.skip_count_fps) frames de webcam
+        self.skip_fps = 5
+        self.count_current_fps = 0
+
+        # Evitar encoding cuando el frame anterior tenía cara (se asume que es la misma persona)
+        self.last_processed_webcam_frame_had_known_face = False
+
+        # Scanear la misma cara (self.max_retries_face_encoding) veces para intentar ver si se encuentra en la DB
+        # Para evitar problemas conde tiempo de scaneo con (self.last_processed_webcam_frame_had_known_face)
+        # Aún no está implementado TODO
+        self.max_attempts_face_encoding = 3
+        self.count_attempts_face_encoding = 0
 
         # Presence automation
         self.presence = PresenceManager(
             on_event=self._on_presence_event,
-            appear_threshold=3,
-            window_seconds=2.0,
             disappear_seconds=10.0,
             cooldown_seconds=30.0,
         )
@@ -91,6 +83,7 @@ class ModernFaceApp(ctk.CTk):
         self._build_right_panel()
 
         # Inicializar DB y encodings
+        self.db_encs = None
         try:
             utils_db.ensure_db_seeded()
         except Exception as e:
@@ -99,6 +92,7 @@ class ModernFaceApp(ctk.CTk):
         self._safe_log("Generando/actualizando encodings de la base...")
         try:
             u_rec._save_encodings_if_necessary(DATABASE_PATH)
+            self.db_encs = u_rec.get_saved_encodings(DATABASE_PATH)
             self._safe_log("Encodings listos.\n")
         except Exception as e:
             self._safe_log(f"[ADVERTENCIA] No se pudieron generar encodings iniciales: {e}\n")
@@ -126,7 +120,7 @@ class ModernFaceApp(ctk.CTk):
         # Threshold
         thr_label = ctk.CTkLabel(self.sidebar, text="Umbral (referencia)")
         thr_label.pack(padx=16, pady=(16,4))
-        self.thr_scale = ctk.CTkSlider(self.sidebar, from_=0.2, to=1.2, number_of_steps=100, variable=self.threshold_var)
+        self.thr_scale = ctk.CTkSlider(self.sidebar, from_=0, to=1, number_of_steps=100, variable=self.threshold_var)
         self.thr_scale.pack(padx=16, pady=(0,10), fill="x")
 
         # Tema
@@ -154,7 +148,7 @@ class ModernFaceApp(ctk.CTk):
         self.video_frame.grid_rowconfigure(0, weight=1)
         self.video_frame.grid_columnconfigure(0, weight=1)
 
-        self.video_label = ctk.CTkLabel(self.video_frame, text="Webcam detenida", width=800, height=450, anchor="center")
+        self.video_label = ctk.CTkLabel(self.video_frame, text="Webcam detenida", text_color="#FFF", width=800, height=450, anchor="center",fg_color="#000")
         self.video_label.grid(row=0, column=0, sticky="nswe", padx=12, pady=12)
 
         # Footer helpers
@@ -213,21 +207,21 @@ class ModernFaceApp(ctk.CTk):
 
     # ---------- Presence callback ----------
     def _on_presence_event(self, evento: str, legajo: int, t: float):
-        """Callback de PresenceManager → registra en DB y loguea."""
-        import datetime
-        ts = datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d %H:%M:%S')
+        if legajo is None:
+            self._safe_log("Por algun motivo legajo None llegó a este método")
+            return
         try:
             with utils_db.get_connection() as conn:
                 cur = conn.cursor()
-                utils_db.empleado_detected(cur, legajo)
-            self._safe_log(f"[DB] Legajo {legajo}: {evento.upper()} registrada a las {ts}")
+                utils_db.empleado_detected(cur, legajo, t)
+            self._safe_log(f"[DB] Legajo {legajo}: {evento.upper()} registrada a las {utils_db.get_timestamp_from_posix_version(t)}")
         except Exception as e:
-            self._safe_log(f"[DB][ERROR] No se pudo registrar {evento} para legajo {legajo}: {e}")
+            traceback.print_exc()
 
     # ---------- Actions ----------
     def on_add_users(self):
         paths = filedialog.askopenfilenames(title="Seleccioná imágenes de usuarios",
-                                            filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.webp")])
+                                            filetypes=[("Imágenes", " ".join(f"*.{ext}" for ext in utils_files.ACCEPTABLE_IMAGE_EXTENSIONS))])
         if not paths:
             return
 
@@ -242,10 +236,10 @@ class ModernFaceApp(ctk.CTk):
         os.makedirs(DATABASE_PATH, exist_ok=True)
         new_files = []
         for i, src in enumerate(paths, start=1):
-            ext = os.path.splitext(src)[1].lower()
-            if ext not in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
+            ext = utils_files.get_file_extension(src)
+            if not utils_files.is_valid_image_extension(ext):
                 continue
-            dst_name = f"{person_name}_{i:03d}{ext}"
+            dst_name = f"{person_name}_{i:03d}.{ext}"
             dst_path = os.path.join(DATABASE_PATH, dst_name)
             idx = i
             while os.path.exists(dst_path):
@@ -284,26 +278,26 @@ class ModernFaceApp(ctk.CTk):
 
     def on_compare_from_image(self):
         img_path = filedialog.askopenfilename(title="Seleccioná una imagen",
-                                              filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.webp")])
+                                              filetypes=[("Imágenes", " ".join(f"*.{ext}" for ext in utils_files.ACCEPTABLE_IMAGE_EXTENSIONS))])
         if not img_path:
             return
 
         self._safe_log(f"Imagen seleccionada: {img_path}")
         try:
             u_rec._save_encodings_if_necessary(DATABASE_PATH)
-            db_encs = filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
+#            self.db_encs = u_rec.get_saved_encodings(DATABASE_PATH)
 
-            main_enc = normalize_encoding(u_rec.get_face_encoding_from_image_path(img_path))
+            main_enc = u_rec.get_face_encoding(img_path)
             if main_enc is None:
                 self._safe_log("No se detectó un rostro válido en la imagen.")
                 return
 
             matches = []
-            for fname, person_enc in db_encs.items():
+            for fname, person_enc in self.db_encs.items():
                 if person_enc is None:
                     continue
                 try:
-                    d, same = u_rec.comparison(main_enc, person_enc)
+                    d, same = u_rec.comparison(main_enc, person_enc, tolerance=self.threshold_var.get())
                 except Exception as e:
                     self._safe_log(f"[ERROR] Comparando con {fname}: {e}")
                     continue
@@ -312,10 +306,13 @@ class ModernFaceApp(ctk.CTk):
 
             if matches:
                 self._safe_log("¡Coincidencias encontradas!")
-                for f, dist in sorted(matches, key=lambda x: x[1]):
-                    self._safe_log(f"  - {f} | distancia = {dist:.4f} (umbral ~ {self.threshold_var.get():.2f})")
+            #    for f, dist in sorted(matches, key=lambda x: x[1]):
+#                    self._safe_log(f"  - {f} | distancia = {dist:.4f} (umbral ~ {self.threshold_var.get():.2f})")
             else:
                 self._safe_log("No se encontraron coincidencias.")
+
+        except u_rec.MultipleFacesDetectedException:
+            self._safe_log("[ERROR] Se detectaron más de una cara en la imagen. Por favor, asegúrese de que haya únicamente una cara.")
         except Exception as e:
             messagebox.showerror("Error", f"Ocurrió un problema al comparar: {e}")
 
@@ -330,10 +327,10 @@ class ModernFaceApp(ctk.CTk):
     def on_check_bad_images(self):
         try:
             u_rec._save_encodings_if_necessary(DATABASE_PATH)
-            all_encs = u_rec.get_saved_encodings(DATABASE_PATH)
+            all_encs = self.db_encs
             bad = []
             for name, enc in all_encs.items():
-                if normalize_encoding(enc) is None:
+                if enc is None:
                     bad.append(name)
             if bad:
                 self._safe_log("Imágenes sin encoding (reemplazar o borrar):")
@@ -353,14 +350,6 @@ class ModernFaceApp(ctk.CTk):
             messagebox.showerror("Webcam", "No se pudo abrir la cámara.")
             return
         self.webcam_running = True
-        # Pre-cargar encodings
-        try:
-            u_rec._save_encodings_if_necessary(DATABASE_PATH)
-            self.db_encs = filtered_db_encodings(u_rec.get_saved_encodings(DATABASE_PATH))
-        except Exception as e:
-            self._safe_log(f"[ADVERTENCIA] No se pudo preparar la base: {e}")
-            self.db_encs = {}
-        # Iniciar loop de video
         self._update_video_frame()
 
     def on_stop_webcam(self):
@@ -371,43 +360,75 @@ class ModernFaceApp(ctk.CTk):
         if self.cap is not None:
             self.cap.release()
             self.cap = None
-        self.video_label.configure(text="Webcam detenida", image=None)
+
+        # Poner imagen vacía para que no muestre el último frame de la webcam
+        blank = Image.new("RGB", (900, 500), (0,0,0))
+        imgtk = ImageTk.PhotoImage(blank)
+        self.video_label.configure(text="Webcam detenida", image=imgtk)
+        self.video_label.imgtk_ref = imgtk
 
     def _update_video_frame(self):
+
         if not self.webcam_running or self.cap is None:
             return
+
         ret, frame = self.cap.read()
         if not ret:
             self.on_stop_webcam()
             return
 
-        # Redimensionar para procesamiento, mantener original para display
-        process_small = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-        # Si tu encoder requiere RGB, descomentar:
-        # process_small = cv2.cvtColor(process_small, cv2.COLOR_BGR2RGB)
 
-        enc = normalize_encoding(u_rec.get_face_encoding_from_opencv_frame(process_small))
+        if  self.count_current_fps < self.skip_fps:
+            print("[SKIP] Frame")
+            self.count_current_fps += 1
 
-        if enc is not None and getattr(self, "db_encs", {}):
-            any_match = False
-            for fname, other_enc in self.db_encs.items():
-                if other_enc is None:
-                    continue
-                try:
-                    d, same = u_rec.comparison(enc, other_enc)
-                except Exception as e:
-                    self._safe_log(f"[ERROR] Comparando con {fname}: {e}")
-                    continue
-                if same:
-                    any_match = True
-                    self._safe_log(f"Match con {fname} | d={d:.4f} (umbral ~ {self.threshold_var.get():.2f})")
-                    # Resolver legajo y notificar presencia
-                    leg = self._resolve_legajo_from_fname(fname)
-                    if leg is not None:
-                        import time as _t
-                        self.presence.see(leg, _t.time())
-            if not any_match:
-                self._safe_log("Sin coincidencias en este frame.")
+        else:
+
+            self.count_current_fps = 0
+
+            process_small = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+            # Si tu encoder requiere RGB, descomentar:
+            # process_small = cv2.cvtColor(process_small, cv2.COLOR_BGR2RGB)
+
+            try:
+                face_loc = u_rec.get_face_location(process_small)
+                if face_loc is not None:
+                    if self.last_processed_webcam_frame_had_face:
+                        enc = None
+                        print("[SKIP] Misma persona detectada.")
+                    else:
+                        enc = u_rec.get_face_encoding(process_small,known_location=face_loc)
+                        print("Nueva cara detectada")
+                else:
+                    self.last_processed_webcam_frame_had_face = False
+                    self.count_attempts_face_encoding = 0
+                    enc = None
+
+
+            except u_rec.MultipleFacesDetectedException as e:
+                self._safe_log("[ERROR] Se detectaron más de una cara en la webcam. Por favor, limite a una sola persona por reconocimiento.")
+                self.last_processed_webcam_frame_had_face = False
+                enc = None
+
+            if enc is not None and self.db_encs is not None:
+                self.last_processed_webcam_frame_had_face = True
+                print("Buscando coincidencias...")
+                any_match = False
+                for fname, other_enc in self.db_encs.items():
+                    if other_enc is None:
+                        continue
+                    try:
+                        d, same = u_rec.comparison(enc, other_enc, tolerance=self.threshold_var.get())
+                    except Exception as e:
+                        self._safe_log(f"[ERROR] Comparando con {fname}: {e}")
+                        continue
+                    if same:
+                        any_match = True
+                        self._safe_log(f"Match con {fname} | d={d:.4f} (umbral ~ {self.threshold_var.get():.2f})")
+                        leg = self._resolve_legajo_from_fname(fname)
+                        self.presence.detection(leg)
+                if not any_match:
+                    self._safe_log("Sin coincidencias en este frame.")
 
         # Mostrar en la UI (convertir a RGB para Pillow)
         display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -416,11 +437,6 @@ class ModernFaceApp(ctk.CTk):
         imgtk = ImageTk.PhotoImage(image=img)
         self.video_label.configure(image=imgtk, text="")
         self.video_label.imgtk_ref = imgtk  # evitar GC
-
-        # Procesar ausencias para disparar SALIDA automática
-        import time as _t
-        self.presence.process_timeouts(_t.time())
-
         self.video_loop_job = self.after(30, self._update_video_frame)
 
 

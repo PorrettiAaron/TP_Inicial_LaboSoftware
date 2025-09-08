@@ -1,5 +1,7 @@
 venv_proyecto/
-tests/db_images/.already_computed_face_encodings.pkl
+#/db_images/.already_computed_face_encodings.pkl
+/db_images/*
+pyme_san_ignacio.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

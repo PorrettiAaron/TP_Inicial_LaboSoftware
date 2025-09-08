@@ -1,9 +1,10 @@
 import cv2
 import src.utils_recognition as u_rec
+from src.utils_db import PYME_EMPLOYEES_IMAGES
 
-database_path = "./tests/db_images/"
-u_rec._save_encodings_if_necessary(database_path)
-saved_encodings = u_rec.get_saved_encodings(database_path)
+db_images = PYME_EMPLOYEES_IMAGES
+u_rec._save_encodings_if_necessary(db_images)
+saved_encodings = u_rec.get_saved_encodings(db_images)
 
 def _quick_comparison(my_encoding):
     print("Looking for you in the database...")

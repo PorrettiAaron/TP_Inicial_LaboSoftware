@@ -1,6 +1,7 @@
 import face_recognition
 import pickle
 import os
+import utils_files
 
 class MultipleFacesDetectedException(Exception):
     def __init__(self):
@@ -11,12 +12,6 @@ ENCODINGS_FILE = ".already_computed_face_encodings.pkl"
 ACCEPTABLE_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "bmp"]
 
 EUCLIDEAN_DISTANCE_TOLERANCE = 0.6
-
-def is_valid_image_extension(ext):
-    return ext in ACCEPTABLE_IMAGE_EXTENSIONS
-
-def is_valid_image(file_path):
-    return is_valid_image_extension(os.path.splitext(file_path)[1][1:])
 
 def get_encodings_file_path(database_path):
     return os.path.join(database_path, ENCODINGS_FILE)
@@ -41,26 +36,14 @@ def _save_encodings_if_necessary(database_path):
         return
     encodings = get_saved_encodings(database_path)
     for image in images:
-        if not is_valid_image(image) or image in encodings:
+        if not utils_files.is_valid_image(image) or image in encodings:
             continue
         encodings[image] = get_face_encoding(os.path.join(database_path, image))
     _set_new_encodings(encodings, database_path)
 
-def register_image_in_encoding_database_new_employee(database_path, employee_id, image_path):
-    # TODO No me convence aún esta implementación
-    employee_image_file_name = "{}.jpg".format(str(employee_id))
-    employee_image_path = os.path.join(database_path, employee_image_file_name)
-    if os.path.exists(employee_image_path):
-        # No debería llegar acá igual
-        raise NameError("It already exists an encoding for employee {}.".format(str(employee_id)))
-    employee_encoding = get_face_encoding(image_path)
-    encodings = get_saved_encodings(database_path)
-    encodings[os.splitext(employee_image_file_name)[0]] = employee_encoding
-    _set_new_encodings(encodings, database_path)
-    os.rename(image_path, employee_image_path)
-
-
 def get_face_location(image):
+    if image is None:
+        return None
     if isinstance(image, str):
         image = face_recognition.load_image_file(image)
     face_locations = face_recognition.face_locations(image)
@@ -71,6 +54,8 @@ def get_face_location(image):
     return face_locations
 
 def get_face_encoding(image, known_location=None):
+    if image is None:
+        return None
     if isinstance(image, str):
         image = face_recognition.load_image_file(image)
     faces = face_recognition.face_encodings(image, known_face_locations=known_location)
@@ -79,12 +64,6 @@ def get_face_encoding(image, known_location=None):
     if len(faces) > 1:
         raise MultipleFacesDetectedException()
     return faces[0]
-
-def get_face_encoding_from_opencv_frame(frame):
-    face_location = get_face_location(frame)
-    if not face_location:
-        return None
-    return get_face_encoding(frame, face_location)
 
 def _euclidean_distance(face1_encoding, face2_encoding):
     return face_recognition.face_distance([face1_encoding], face2_encoding)[0]

@@ -2,9 +2,11 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 
-PYME_DB = "pyme_san_ignacio.db"
+PYME_DB = "./pyme_san_ignacio.db"
+PYME_EMPLOYEES_IMAGES = "./db_images/"
 
 empleados = [
+    (100, "Matías Stricker", "Ingeniero en sistemas", "Sistemas"),
     (1, "Juan Pérez", "Ingeniero de alimentos", "Producción"),
     (2, "María López", "Técnico químico", "Calidad"),
     (3, "Lucas Fernandez", "Técnico químico", "Calidad"),
@@ -91,26 +93,34 @@ def ensure_db_seeded(db_path: str = PYME_DB):
         manual_load_empleados(cur, empleados)
         manual_load_horarios_empleados(cur, horarios)
 
-def empleado_detected(cursor, legajo: int):
-    cursor.execute(
-        'SELECT entrada, salida FROM asistencia_empleado WHERE legajo_empleado = ? ORDER BY entrada DESC LIMIT 1',
-        (legajo,),
-    )
+def get_timestamp_from_posix_version(posix_timestamp, _format="%Y-%m-%d %H:%M:%S"):
+    return datetime.fromtimestamp(posix_timestamp).strftime(_format)
+
+def report_empleado_entrada(cursor, legajo: int, timestamp):
+    cursor.execute("INSERT INTO asistencia_empleado (legajo_empleado, entrada, salida) VALUES (?,?,NULL)", (legajo, timestamp))
+
+def report_empleado_salida(cursor, legajo: int, timestamp, entrada=None):
+    if entrada is None:
+        cursor.execute("SELECT entrada FROM asistencia_empleado WHERE legajo_empleado = ? ORDER BY entrada DESC LIMIT 1")
+        entrada = cursor.fetchone()[0]
+    cursor.execute("UPDATE asistencia_empleado SET salida = ? WHERE legajo_empleado = ? AND entrada = ?",(timestamp, legajo, entrada))
+
+def get_last_assistance_empleado(cursor, legajo):
+    cursor.execute("SELECT entrada, salida FROM asistencia_empleado WHERE legajo_empleado = ? ORDER BY entrada DESC LIMIT 1", (legajo,))
     row = cursor.fetchone()
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    if row is None or row[1] is not None:
-        cursor.execute(
-            'INSERT INTO asistencia_empleado (legajo_empleado, entrada, salida) VALUES (?, ?, NULL)',
-            (legajo, now),
-        )
-        return {'status': 'entrada', 'legajo': legajo, 'timestamp': now}
-    else:
-        last_entrada = row[0]
-        cursor.execute(
-            'UPDATE asistencia_empleado SET salida = ? WHERE legajo_empleado = ? AND entrada = ?',
-            (now, legajo, last_entrada),
-        )
-        return {'status': 'salida', 'legajo': legajo, 'timestamp': now, 'entrada': last_entrada}
+    if row is None:
+        return  None, None
+    return row
+
+def empleado_detected(cursor, legajo: int, timestamp: float):
+    timestamp = get_timestamp_from_posix_version(timestamp)
+    entrada, salida = get_last_assistance_empleado(cursor, legajo)
+    if entrada is None or salida is not None: # Registar nueva entrada
+        report_empleado_entrada(cursor, legajo, timestamp)
+        print("Registrada entrada de empleado")
+    else: # Registar nueva salida
+        report_empleado_salida(cursor, legajo, timestamp, entrada)
+        print("Registrada salida de empleado")
 
 def add_face_mapping(cursor, archivo: str, legajo: int):
     cursor.execute('INSERT OR REPLACE INTO rostros (archivo, legajo) VALUES (?, ?)', (archivo, legajo))

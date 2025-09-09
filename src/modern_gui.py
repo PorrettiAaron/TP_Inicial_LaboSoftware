@@ -27,10 +27,10 @@ from tkinter import filedialog, messagebox
 # - get_face_encoding_from_opencv_frame(frame_bgr|rgb) -> vector | [vector] | None
 # - get_face_encoding_from(np.ndarray | path) -> vector | [vector] | None
 # - comparison(encoding_a, encoding_b) -> (distance: float, same_person: bool)
-import utils_recognition as u_rec  # en tu repo actual el módulo se llama utils_recognition.py
-import utils_db
-import utils_files
-from presence import PresenceManager
+from . import utils_recognition as u_rec  # en tu repo actual el módulo se llama utils_recognition.py
+from . import utils_db
+from . import utils_files
+from src.presence import PresenceManager
 
 DATABASE_PATH = utils_db.PYME_EMPLOYEES_IMAGES
 os.makedirs(DATABASE_PATH, exist_ok=True)
@@ -393,25 +393,25 @@ class ModernFaceApp(ctk.CTk):
             try:
                 face_loc = u_rec.get_face_location(process_small)
                 if face_loc is not None:
-                    if self.last_processed_webcam_frame_had_face:
+                    if self.last_processed_webcam_frame_had_known_face:
                         enc = None
                         print("[SKIP] Misma persona detectada.")
                     else:
                         enc = u_rec.get_face_encoding(process_small,known_location=face_loc)
                         print("Nueva cara detectada")
                 else:
-                    self.last_processed_webcam_frame_had_face = False
+                    self.last_processed_webcam_frame_had_known_face = False
                     self.count_attempts_face_encoding = 0
                     enc = None
 
 
             except u_rec.MultipleFacesDetectedException as e:
                 self._safe_log("[ERROR] Se detectaron más de una cara en la webcam. Por favor, limite a una sola persona por reconocimiento.")
-                self.last_processed_webcam_frame_had_face = False
+                self.last_processed_webcam_frame_had_known_face = False
                 enc = None
 
             if enc is not None and self.db_encs is not None:
-                self.last_processed_webcam_frame_had_face = True
+                self.last_processed_webcam_frame_had_known_face = True
                 print("Buscando coincidencias...")
                 any_match = False
                 for fname, other_enc in self.db_encs.items():

@@ -1,7 +1,7 @@
 import face_recognition
 import pickle
 import os
-import utils_files
+from . import utils_files
 
 class MultipleFacesDetectedException(Exception):
     def __init__(self):

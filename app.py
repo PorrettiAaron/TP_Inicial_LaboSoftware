@@ -30,7 +30,7 @@ def abrir_tablas():
 boton_reconocimiento = tk.Button(ventana, text="Reconocimiento Facial", command=abrir_reconocimiento_facial, width=25, height=2)
 boton_reconocimiento.pack(pady=5)
 
-boton_tablas = tk.Button(ventana, text="Tablas", command=abrir_tablas, width=25, height=2)
+boton_tablas = tk.Button(ventana, text="Tablas Referenciales", command=abrir_tablas, width=25, height=2)
 boton_tablas.pack(pady=5)
 
 if __name__ == "__main__":

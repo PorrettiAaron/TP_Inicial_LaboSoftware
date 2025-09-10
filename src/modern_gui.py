@@ -36,9 +36,9 @@ DATABASE_PATH = utils_db.PYME_EMPLOYEES_IMAGES
 os.makedirs(DATABASE_PATH, exist_ok=True)
 
 # ---------------- Aplicación ----------------
-class ModernFaceApp(ctk.CTk):
-    def __init__(self):
-        super().__init__()
+class ModernFaceApp(ctk.CTkToplevel): 
+    def __init__(self, master=None):
+        super().__init__(master)
         self.title("Reconocimiento Facial - Interfaz Moderna")
         self.geometry("1100x700")
         ctk.set_appearance_mode("dark")

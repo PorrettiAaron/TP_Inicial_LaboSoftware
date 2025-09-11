@@ -32,8 +32,8 @@ dependencies = [
     # GUI
     "customtkinter",
     "Pillow",
-
-    # Base de datos SQLite está en la stdlib, no hace falta agregar nada
+    "pandas",
+    "matplotlib",
 
     # Dlib: wheel precompilado específico para Python 3.11 en Windows
     "dlib @ https://github.com/z-mahmud22/Dlib_Windows_Python3.x/raw/main/dlib-19.24.1-cp311-cp311-win_amd64.whl"

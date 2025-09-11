@@ -11,7 +11,8 @@ from src.utils_db import (
     get_productos_por_kg,
     get_tiempos_produccion,
     get_desperdicio,
-    get_stock_materia_prima
+    get_stock_materia_prima,
+    ensure_db_seeded
 )
 
 class DashboardsApp(tk.Toplevel):
@@ -29,6 +30,7 @@ class DashboardsApp(tk.Toplevel):
         self.tab_desperdicio = ttk.Frame(self.tab_control)
         self.tab_stock = ttk.Frame(self.tab_control)
 
+        ensure_db_seeded()
         self.tab_control.add(self.tab_productos_finales, text='Productos Finales')
         self.tab_control.add(self.tab_insumos, text='Insumos')
         self.tab_control.add(self.tab_desperdicio, text='Desperdicio')

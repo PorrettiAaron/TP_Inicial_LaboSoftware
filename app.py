@@ -25,7 +25,7 @@ def abrir_reconocimiento_facial():
 
 def abrir_tablas():
     app = ReportApp()
-    app.mainloop() 
+    app.mainloop()
 
 # Función para abrir la ventana de reportes
 def abrir_reportes():

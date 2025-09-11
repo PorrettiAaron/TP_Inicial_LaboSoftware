@@ -40,7 +40,8 @@ def abrir_reconocimiento_facial():
     ModernFaceApp(master=ventana)
 
 def abrir_tablas():
-    ReportApp(master=ventana)
+    app =ReportApp()
+    app.mainloop()
 
 def abrir_reportes():
     try:

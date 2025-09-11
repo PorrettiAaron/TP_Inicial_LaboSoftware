@@ -40,8 +40,7 @@ def abrir_reconocimiento_facial():
     ModernFaceApp(master=ventana)
 
 def abrir_tablas():
-    app = ReportApp()
-    app.mainloop()
+    ReportApp(master=ventana)
 
 def abrir_reportes():
     try:
@@ -75,5 +74,10 @@ boton_tablas.pack(pady=5)
 boton_reportes = crear_boton("Reportes y Dashboards", abrir_reportes)
 boton_reportes.pack(pady=5)
 
+def salir():
+    ventana.destroy()
+    sys.exit()
+
 if __name__ == "__main__":
+    ventana.protocol("WM_DELETE_WINDOW", salir)
     ventana.mainloop()
